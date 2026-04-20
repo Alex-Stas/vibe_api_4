@@ -7,10 +7,53 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+_LAST_ERRORS: dict[str, str | None] = {
+    "coordinates": None,
+    "current_weather": None,
+    "forecast": None,
+    "air_pollution": None,
+}
+
+
+def _set_last_error(source: str, message: str | None) -> None:
+    _LAST_ERRORS[source] = message
+
+
+def get_last_error(source: str) -> str | None:
+    return _LAST_ERRORS.get(source)
+
+
+def _safe_request_json(url: str, params: dict, source: str) -> object | None:
+    try:
+        response = requests.get(url, params=params, timeout=10)
+    except requests.RequestException:
+        _set_last_error(source, "Сетевая ошибка при обращении к погодному сервису.")
+        return None
+
+    if response.status_code == 429:
+        _set_last_error(source, "429: превышен лимит запросов к погодному сервису.")
+        return None
+    if 400 <= response.status_code < 500:
+        _set_last_error(source, f"Ошибка запроса к погодному сервису ({response.status_code}).")
+        return None
+    if response.status_code >= 500:
+        _set_last_error(source, f"Сервис погоды временно недоступен ({response.status_code}).")
+        return None
+
+    try:
+        data = response.json()
+    except ValueError:
+        _set_last_error(source, "Пустой или некорректный ответ от погодного сервиса.")
+        return None
+
+    _set_last_error(source, None)
+    return data
+
 
 def get_coordinates(city: str, limit: int = 1) -> tuple[float, float] | None:
     api_key = os.getenv("API_KEY")
     if not api_key or not city.strip():
+        _set_last_error("coordinates", "Не задан API-ключ или пустой город.")
         return None
 
     url = "http://api.openweathermap.org/geo/1.0/direct"
@@ -21,28 +64,31 @@ def get_coordinates(city: str, limit: int = 1) -> tuple[float, float] | None:
         "lang": "ru",
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-    except (requests.RequestException, ValueError):
+    data = _safe_request_json(url, params, "coordinates")
+    if not isinstance(data, list):
+        if get_last_error("coordinates") is None:
+            _set_last_error("coordinates", "Пустой ответ геокодинга.")
         return None
 
     if not data:
+        _set_last_error("coordinates", "Город не найден.")
         return None
 
     try:
         lat = float(data[0]["lat"])
         lon = float(data[0]["lon"])
     except (KeyError, TypeError, ValueError, IndexError):
+        _set_last_error("coordinates", "В ответе геокодинга отсутствуют координаты.")
         return None
 
+    _set_last_error("coordinates", None)
     return lat, lon
 
 
 def get_current_weather(lat: float, lon: float) -> dict:
     api_key = os.getenv("API_KEY")
     if not api_key:
+        _set_last_error("current_weather", "Не задан API-ключ.")
         return {}
 
     url = "https://api.openweathermap.org/data/2.5/weather"
@@ -54,22 +100,20 @@ def get_current_weather(lat: float, lon: float) -> dict:
         "lang": "ru",
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-    except (requests.RequestException, ValueError):
-        return {}
-
+    data = _safe_request_json(url, params, "current_weather")
     if not isinstance(data, dict):
+        if get_last_error("current_weather") is None:
+            _set_last_error("current_weather", "Пустой ответ по текущей погоде.")
         return {}
 
+    _set_last_error("current_weather", None)
     return data
 
 
 def get_forecast_5d3h(lat: float, lon: float) -> list[dict]:
     api_key = os.getenv("API_KEY")
     if not api_key:
+        _set_last_error("forecast", "Не задан API-ключ.")
         return []
 
     url = "https://api.openweathermap.org/data/2.5/forecast"
@@ -81,26 +125,25 @@ def get_forecast_5d3h(lat: float, lon: float) -> list[dict]:
         "lang": "ru",
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-    except (requests.RequestException, ValueError):
-        return []
-
+    data = _safe_request_json(url, params, "forecast")
     if not isinstance(data, dict):
+        if get_last_error("forecast") is None:
+            _set_last_error("forecast", "Пустой ответ по прогнозу.")
         return []
 
     raw_list = data.get("list")
     if not isinstance(raw_list, list):
+        _set_last_error("forecast", "В ответе прогноза нет списка.")
         return []
 
+    _set_last_error("forecast", None)
     return [item for item in raw_list if isinstance(item, dict)]
 
 
 def get_air_pollution(lat: float, lon: float) -> dict:
     api_key = os.getenv("API_KEY")
     if not api_key:
+        _set_last_error("air_pollution", "Не задан API-ключ.")
         return {}
 
     url = "https://api.openweathermap.org/data/2.5/air_pollution"
@@ -110,28 +153,28 @@ def get_air_pollution(lat: float, lon: float) -> dict:
         "appid": api_key,
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-    except (requests.RequestException, ValueError):
-        return {}
-
+    data = _safe_request_json(url, params, "air_pollution")
     if not isinstance(data, dict):
+        if get_last_error("air_pollution") is None:
+            _set_last_error("air_pollution", "Пустой ответ по качеству воздуха.")
         return {}
 
     raw_list = data.get("list")
     if not isinstance(raw_list, list) or not raw_list:
+        _set_last_error("air_pollution", "В ответе качества воздуха нет данных.")
         return {}
 
     first = raw_list[0]
     if not isinstance(first, dict):
+        _set_last_error("air_pollution", "Некорректный формат данных качества воздуха.")
         return {}
 
     components = first.get("components")
     if not isinstance(components, dict):
+        _set_last_error("air_pollution", "В ответе отсутствуют компоненты загрязнений.")
         return {}
 
+    _set_last_error("air_pollution", None)
     return components
 
 

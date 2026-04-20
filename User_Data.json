@@ -1,0 +1,11 @@
+{
+  "245682747": {
+    "city": "Купчино",
+    "lat": 59.852718,
+    "lon": 30.392204,
+    "notifications": {
+      "enabled": true,
+      "interval_h": 2
+    }
+  }
+}
